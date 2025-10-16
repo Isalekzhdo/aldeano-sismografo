@@ -62,7 +62,7 @@ st.markdown("""
     /* Encabezado principal */
     .main-header {
         font-size: 2.8em;
-        color: #1f77b4;
+        color: #d3d3d3;
         font-weight: bold;
         margin-bottom: 10px;
         text-align: center;
@@ -71,7 +71,7 @@ st.markdown("""
     /* Encabezados de sección */
     .section-header {
         font-size: 1.8em;
-        color: #ff7f0e;
+        color: #d3d3d3;
         margin-top: 20px;
         margin-bottom: 15px;
         border-bottom: 3px solid #ff7f0e;
