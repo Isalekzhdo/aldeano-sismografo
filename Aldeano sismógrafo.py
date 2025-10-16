@@ -8,9 +8,6 @@ import folium
 from streamlit_folium import st_folium
 from folium.plugins import HeatMap
 import base64
-import os
-port = int(os.environ.get("PORT", 5000))
-app.run(host="0.0.0.0", port=port)
 
 st.set_page_config(page_title="Aldeano Sismografo", layout="wide")
 def add_background_local(image_file):
