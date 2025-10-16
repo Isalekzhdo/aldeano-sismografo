@@ -24,7 +24,7 @@ def add_background_local(image_file):
     </style>
     """
     st.markdown(background_css, unsafe_allow_html=True)
-add_background_local("C:\\Users\\cubic\\python\\aldeano\\fondo.jpg")
+add_background_local("fondo.jpg")
 def add_sidebar_background(image_file):
     with open(image_file, "rb") as f:
         encoded = base64.b64encode(f.read()).decode()
@@ -39,7 +39,7 @@ def add_sidebar_background(image_file):
     </style>
     """
     st.markdown(sidebar_bg_css, unsafe_allow_html=True)
-add_sidebar_background("C:\\Users\\cubic\\python\\aldeano\\17337611_xl.jpg")
+add_sidebar_background("17337611_xl.jpg")
 def set_custom_font(font_path):
     font_css = f"""
     <style>
