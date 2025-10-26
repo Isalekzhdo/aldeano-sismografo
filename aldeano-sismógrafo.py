@@ -147,17 +147,28 @@ def obtener_clima_real(inicio, fin, lat, lon):
     resp = requests.get(url)
     data = resp.json()
 
-    if "properties" not in data:
-        return pd.DataFrame()
+    # Si la API falla o no hay datos
+    if "properties" not in data or "parameter" not in data["properties"]:
+        return pd.DataFrame(columns=["fecha", "temperatura", "precipitacion"])
 
-    registros = data["properties"]["parameter"]
-    fechas = pd.to_datetime(list(registros["T2M"].keys()))
+    parametros = data["properties"]["parameter"]
 
+    # Aseguramos que existan ambas variables
+    if "T2M" not in parametros or "PRECTOT" not in parametros:
+        return pd.DataFrame(columns=["fecha", "temperatura", "precipitacion"])
+
+    # Convertimos las fechas del diccionario a datetime
+    fechas = pd.to_datetime(list(parametros["T2M"].keys()), errors="coerce")
+
+    # Construimos el DataFrame final
     clima = pd.DataFrame({
         "fecha": fechas,
-        "temperatura": list(registros["T2M"].values()),
-        "precipitacion": list(registros["PRECTOT"].values())
+        "temperatura": list(parametros["T2M"].values()),
+        "precipitacion": list(parametros["PRECTOT"].values())
     })
+
+    # Eliminamos posibles filas con fechas inválidas
+    clima = clima.dropna(subset=["fecha"])
     
     return clima
 
