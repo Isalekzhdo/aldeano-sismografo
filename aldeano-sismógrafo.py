@@ -8,6 +8,7 @@ import folium
 from streamlit_folium import st_folium
 from folium.plugins import HeatMap
 import base64
+import requests
 
 st.set_page_config(page_title="Aldeano Sismografo", layout="wide")
 def add_background_local(image_file):
@@ -108,34 +109,54 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 @st.cache_data
-def generar_datos_sismicos(inicio, fin, lat_epic, lon_epic, n_eventos=500):
-    fechas = pd.date_range(inicio, fin, periods=n_eventos)
-    sismos = pd.DataFrame({
-        "marca temporal": fechas,
-        "latitud": np.random.normal(lat_epic, 10, n_eventos),
-        "longitud": np.random.normal(lon_epic, 15, n_eventos),
-        "magnitud": np.random.exponential(1.3, n_eventos) + 4.0,
-        "profundidad_km": np.random.exponential(50, n_eventos) + 10,
-        "lugar": [f'Región {i}' for i in range(n_eventos)]
-    })
-    sismos['magnitud'] = sismos['magnitud'].clip(4.0, 9.0)
-    sismos['profundidad_km'] = sismos['profundidad_km'].clip(0, 700)
+def obtener_sismos_reales(inicio, fin, min_magnitud, max_magnitud, region):
+    url = (
+        "https://earthquake.usgs.gov/fdsnws/event/1/query?"
+        f"format=geojson&starttime={inicio}&endtime={fin}"
+        f"&minmagnitude={min_magnitud}&maxmagnitude={max_magnitud}"
+        "&limit=1000"
+    )
+    resp = requests.get(url)
+    data = resp.json()
+
+    if "features" not in data:
+        return pd.DataFrame()
+
+    sismos = pd.DataFrame([
+        {
+            "marca temporal": datetime.utcfromtimestamp(f["properties"]["time"] / 1000),
+            "latitud": f["geometry"]["coordinates"][1],
+            "longitud": f["geometry"]["coordinates"][0],
+            "profundidad_km": f["geometry"]["coordinates"][2],
+            "magnitud": f["properties"]["mag"],
+            "lugar": f["properties"]["place"]
+        }
+        for f in data["features"]
+        if f["properties"]["mag"] is not None
+    ])
 
     return sismos
 
 @st.cache_data
-def generar_datos_climáticos(inicio, fin):
-    fechas_clima = pd.date_range(inicio, fin, freq='D')
-    dias = len(fechas_clima)
+def obtener_clima_real(inicio, fin, lat, lon):
+    url = (
+        "https://power.larc.nasa.gov/api/temporal/daily/point?"
+        f"parameters=T2M,PRECTOT&start={inicio.strftime('%Y%m%d')}&end={fin.strftime('%Y%m%d')}"
+        f"&latitude={lat}&longitude={lon}&format=JSON"
+    )
+    resp = requests.get(url)
+    data = resp.json()
+
+    if "properties" not in data:
+        return pd.DataFrame()
+
+    registros = data["properties"]["parameter"]
+    fechas = pd.to_datetime(list(registros["T2M"].keys()))
 
     clima = pd.DataFrame({
-        "fecha": fechas_clima,  # <-- Added this line
-        "dias": dias,
-        "temperatura": 15 + 10 * np.sin(np.arange(dias) * 2 * np.pi / 365) + np.random.randn(dias) * 2,
-        "precipitacion": np.abs(np.random.gamma(2, 2, dias)),
-        "nivel_mar": np.random.randn(dias).cumsum() * 0.05,
-        "glaciares": 100 - np.arange(dias) * 0.01 + np.random.randn(dias) * 0.5,
-        "sequia": 30 + 20 * np.sin(np.arange(dias) * 2 * np.pi / 365) + np.random.randn(dias) * 5,
+        "fecha": fechas,
+        "temperatura": list(registros["T2M"].values()),
+        "precipitacion": list(registros["PRECTOT"].values())
     })
     
     return clima
@@ -175,15 +196,9 @@ st.sidebar.markdown("---")
 min_magnitud = st.sidebar.slider("Magnitud mínima:", 0.0, 9.0, 4.5, 0.1)
 max_magnitud = st.sidebar.slider("Magnitud máxima:", min_magnitud, 9.0, 8.0, 0.1)
 #generar datos
-sismos = generar_datos_sismicos(
-    fecha_inicio, 
-    fecha_fin, 
-    region_config['centro'][0],
-    region_config['centro'][1],
-    n_eventos=500
-)
+sismos = obtener_sismos_reales(fecha_inicio, fecha_fin, min_magnitud, max_magnitud, region_seleccionada)
 
-clima = generar_datos_climáticos(fecha_inicio, fecha_fin)
+clima = obtener_clima_real(fecha_inicio, fecha_fin, region_config['centro'][0], region_config['centro'][1])
 
 # Filtrar por magnitud
 sismos_filtrados = sismos[
