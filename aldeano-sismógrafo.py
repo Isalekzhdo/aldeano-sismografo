@@ -361,7 +361,7 @@ with tab3:
 
     datos_mensuales.columns = ['mes', 'freq', 'mag_mean', 'mag_max']
     datos_mensuales['mes'] = datos_mensuales['mes'].dt.to_timestamp()
-
+    clima['fecha'] = pd.to_datetime(clima['fecha'], errors='coerce')
     clima['mes'] = clima['fecha'].dt.to_period('M').dt.to_timestamp()
     clima_mensual = clima.groupby('mes').agg({
         'temperatura': 'mean',
