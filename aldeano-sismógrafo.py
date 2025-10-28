@@ -380,7 +380,7 @@ with tab3:
     datos_mensuales.sort_values('mes'),
     clima_mensual.sort_values('mes'),
     on='mes',
-    tolerance=pd.Timedelta('31D'),
+    tolerance=pd.Timedelta('90D'),
     direction='nearest'
 )
 
