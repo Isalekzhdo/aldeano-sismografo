@@ -349,11 +349,19 @@ with tab2:
 
 #PESTAÑA 3: Correlaciones
 with tab3:
-    st.markdown('<div class="section-header"> Correlaciones</div>', 
-               unsafe_allow_html=True)
-    
-    # Agregar datos por mes
-    sismos_filtrados = sismos_filtrados.copy() 
+    st.markdown('<div class="section-header"> Correlaciones</div>', unsafe_allow_html=True)
+    if 'marca temporal' in sismos_filtrados.columns:
+        sismos_filtrados['marca temporal'] = pd.to_datetime(sismos_filtrados['marca temporal'], errors='coerce')
+    else:
+        st.error("No existe la columna 'marca temporal' en sismos_filtrados.")
+        st.stop()
+
+    if 'fecha' in clima.columns:
+        clima['fecha'] = pd.to_datetime(clima['fecha'], errors='coerce')
+    else:
+        st.error("No existe la columna 'fecha' en clima.")
+        st.stop()
+    sismos_filtrados = sismos_filtrados.copy()
     sismos_filtrados['mes'] = sismos_filtrados["marca temporal"].dt.to_period('M')
     datos_mensuales = sismos_filtrados.groupby('mes').agg({
         "magnitud": ['count', 'mean', 'max']
@@ -361,19 +369,27 @@ with tab3:
 
     datos_mensuales.columns = ['mes', 'freq', 'mag_mean', 'mag_max']
     datos_mensuales['mes'] = datos_mensuales['mes'].dt.to_timestamp()
-    clima['fecha'] = pd.to_datetime(clima['fecha'], errors='coerce')
+
     clima['mes'] = clima['fecha'].dt.to_period('M').dt.to_timestamp()
     clima_mensual = clima.groupby('mes').agg({
         'temperatura': 'mean',
         'precipitacion': 'sum'
     }).reset_index()
-    
-    combinado = pd.merge(datos_mensuales, clima_mensual, on='mes')
 
+    combinado = pd.merge(datos_mensuales, clima_mensual, on='mes', how='inner')
+
+    st.write("**Tamaño del DataFrame combinado:**", combinado.shape)
+    st.write("**Primeras filas de datos combinados:**")
+    st.dataframe(combinado.head())
+
+    if combinado.empty:
+        st.warning("No se encontraron coincidencias entre datos de clima y sismos. "
+                   "Verifica que las fechas tengan el mismo rango temporal.")
+        st.stop()
     corr_matrix = combinado[['freq', 'temperatura', 'precipitacion']].corr()
-    
+
     col1, col2 = st.columns(2)
-    
+
     with col1:
         st.markdown("Matriz")
         fig = go.Figure(data=go.Heatmap(
@@ -387,11 +403,11 @@ with tab3:
         ))
         fig.update_layout(height=500)
         st.plotly_chart(fig, use_container_width=True)
-    
+
     with col2:
         st.markdown("Correlación con Frecuencia")
         corr_freq = corr_matrix['freq'].drop('freq')
-        
+
         fig = px.bar(
             x=['Temperatura', 'Precipitación'],
             y=corr_freq.values,
