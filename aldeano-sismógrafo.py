@@ -376,7 +376,13 @@ with tab3:
         'precipitacion': 'sum'
     }).reset_index()
 
-    combinado = pd.merge(datos_mensuales, clima_mensual, on='mes', how='inner')
+    combinado = pd.merge_asof(
+    datos_mensuales.sort_values('mes'),
+    clima_mensual.sort_values('mes'),
+    on='mes',
+    tolerance=pd.Timedelta('31D'),
+    direction='nearest'
+)
 
     st.write("**Tamaño del DataFrame combinado:**", combinado.shape)
     st.write("**Primeras filas de datos combinados:**")
