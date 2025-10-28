@@ -1,139 +1,31 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime, timedelta
 import requests
+from datetime import datetime, timedelta, date
 import folium
 from streamlit_folium import st_folium
-from folium.plugins import HeatMap
-import base64
+import plotly.express as px
 
-st.set_page_config(page_title="Aldeano Sismografo", layout="wide")
+st.set_page_config(page_title="Aldeano Sismógrafo", layout="wide")
 
-def add_background_local(image_file):
-    with open(image_file, "rb") as f:
-        encoded = base64.b64encode(f.read()).decode()
-    background_css = f"""
-    <style>
-    .stApp {{
-        background-image: url("data:image/png;base64,{encoded}");
-        background-size: cover;
-        background-position: center;
-        background-attachment: fixed;
-    }}
-    </style>
-    """
-    st.markdown(background_css, unsafe_allow_html=True)
-
-add_background_local("fondo.jpg")
-
-def add_sidebar_background(image_file):
-    with open(image_file, "rb") as f:
-        encoded = base64.b64encode(f.read()).decode()
-    sidebar_bg_css = f"""
-    <style>
-    [data-testid="stSidebar"] > div:first-child {{
-        background-image: url("data:image/png;base64,{encoded}");
-        background-size: cover;
-        background-position: center;
-        background-repeat: no-repeat;
-    }}
-    </style>
-    """
-    st.markdown(sidebar_bg_css, unsafe_allow_html=True)
-
-add_sidebar_background("17337611_xl.jpg")
-
-def set_custom_font(font_path):
-    font_css = f"""
-    <style>
-    @font-face {{
-        font-family: 'Minecraft';
-        src: url('file://{font_path}') format('truetype');
-    }}
-
-    html, body, [class*="css"]  {{
-        font-family: 'Minecraft', sans-serif !important;
-    }}
-    </style>
-    """
-    st.markdown(font_css, unsafe_allow_html=True)
-
-set_custom_font("Minecraft.ttf")
-
-st.markdown("""
-    <style>
-    .main-header {
-        font-size: 2.8em;
-        color: #d3d3d3;
-        font-weight: bold;
-        margin-bottom: 10px;
-        text-align: center;
-    }
-    .section-header {
-        font-size: 1.8em;
-        color: #d3d3d3;
-        margin-top: 20px;
-        margin-bottom: 15px;
-        border-bottom: 3px solid #ff7f0e;
-        padding-bottom: 5px;
-    }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 24px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        padding-left: 20px;
-        padding-right: 20px;
-        background-color: #f0f2f6;
-        border-radius: 10px 10px 0 0;
-        font-weight: 600;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #1f77b4;
-        color: white;
-    }
-    div[data-testid="metric-container"] {
-        background-color: #f8f9fa;
-        border: 2px solid #e9ecef;
-        padding: 15px;
-        border-radius: 10px;
-        box-shadow: 2px 2px 8px rgba(0,0,0,0.1);
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-@st.cache_data
-def generar_datos_sismicos(inicio, fin, lat_epic, lon_epic, n_eventos=500):
-    fechas = pd.date_range(inicio, fin, periods=n_eventos)
-    sismos = pd.DataFrame({
-        "marca temporal": fechas,
-        "latitud": np.random.normal(lat_epic, 10, n_eventos),
-        "longitud": np.random.normal(lon_epic, 15, n_eventos),
-        "magnitud": np.random.exponential(1.3, n_eventos) + 4.0,
-        "profundidad_km": np.random.exponential(50, n_eventos) + 10,
-        "lugar": [f'Región {i}' for i in range(n_eventos)]
-    })
-    sismos['magnitud'] = sismos['magnitud'].clip(4.0, 9.0)
-    sismos['profundidad_km'] = sismos['profundidad_km'].clip(0, 700)
-    return sismos
+# ==========================
+# Funciones auxiliares
+# ==========================
 
 @st.cache_data
 def obtener_clima_real_openmeteo(inicio, fin, lat, lon):
     """
-    Descarga datos históricos de temperatura y precipitación 
-    desde Open-Meteo (históricos reales, no pronóstico).
+    Obtiene datos climáticos reales (temperatura y precipitación)
+    desde la API Open-Meteo.
     """
+    # Convertir fechas si son tipo date
+    if isinstance(inicio, date):
+        inicio = datetime.combine(inicio, datetime.min.time())
+    if isinstance(fin, date):
+        fin = datetime.combine(fin, datetime.min.time())
 
-    # Asegurar tipos correctos
-    if isinstance(inicio, pd.Timestamp):
-        inicio = inicio.date()
-    if isinstance(fin, pd.Timestamp):
-        fin = fin.date()
-
-    hoy = datetime.now().date()
+    hoy = datetime.now()
     if fin > hoy:
         fin = hoy
 
@@ -147,257 +39,157 @@ def obtener_clima_real_openmeteo(inicio, fin, lat, lon):
         "timezone": "auto"
     }
 
-    try:
-        resp = requests.get(url, params=params, timeout=15)
-        data = resp.json()
-    except Exception as e:
-        st.error(f"❌ Error al conectar con la API de clima: {e}")
-        return pd.DataFrame(columns=["fecha", "temperatura", "precipitacion"])
+    resp = requests.get(url, params=params)
+    if resp.status_code != 200:
+        st.warning("Error al obtener datos de Open-Meteo.")
+        return pd.DataFrame()
 
-    # Verificar si la respuesta tiene datos válidos
-    if "daily" not in data or "time" not in data["daily"]:
-        st.warning("⚠️ No se recibieron datos climáticos válidos de Open-Meteo.")
-        return pd.DataFrame(columns=["fecha", "temperatura", "precipitacion"])
+    data = resp.json()
+    if "daily" not in data:
+        st.warning("Sin datos climáticos disponibles para ese rango.")
+        return pd.DataFrame()
 
-    # Crear DataFrame
     clima = pd.DataFrame({
-        "fecha": pd.to_datetime(data["daily"]["time"]),
-        "temperatura": [
-            (max_t + min_t) / 2
-            for max_t, min_t in zip(
-                data["daily"]["temperature_2m_max"],
-                data["daily"]["temperature_2m_min"]
-            )
-        ],
+        "fecha": data["daily"]["time"],
+        "temp_max": data["daily"]["temperature_2m_max"],
+        "temp_min": data["daily"]["temperature_2m_min"],
         "precipitacion": data["daily"]["precipitation_sum"]
     })
 
-    # Depurar datos faltantes
-    clima = clima.dropna(subset=["fecha"])
+    clima["fecha"] = pd.to_datetime(clima["fecha"])
     return clima
 
-# Sidebar y configuración
-st.sidebar.title("Configuración")
-st.sidebar.markdown("---")
 
-regiones = {
-    "Norteamérica": {"centro": [39, -98], "zoom": 4, "lat_rango": 15},
-    "Centroamérica": {"centro": [12, -85], "zoom": 5, "lat_rango": 8},
-    "Sudamérica": {"centro": [-10, -60], "zoom": 4, "lat_rango": 20},
-    "México": {"centro": [23, -102], "zoom": 5, "lat_rango": 10},
+@st.cache_data
+def obtener_sismos_reales(inicio, fin, min_magnitud=4.0, max_magnitud=9.0, region="Mexico"):
+    """
+    Obtiene datos sísmicos reales desde la API del USGS.
+    """
+    if isinstance(inicio, date):
+        inicio = datetime.combine(inicio, datetime.min.time())
+    if isinstance(fin, date):
+        fin = datetime.combine(fin, datetime.min.time())
+
+    url = "https://earthquake.usgs.gov/fdsnws/event/1/query"
+    params = {
+        "format": "geojson",
+        "starttime": inicio.strftime("%Y-%m-%d"),
+        "endtime": fin.strftime("%Y-%m-%d"),
+        "minmagnitude": min_magnitud,
+        "maxmagnitude": max_magnitud,
+        "limit": 1000
+    }
+
+    resp = requests.get(url, params=params)
+    data = resp.json()
+
+    if "features" not in data:
+        return pd.DataFrame(columns=["marca temporal", "latitud", "longitud", "magnitud", "profundidad_km", "lugar"])
+
+    registros = []
+    for sismo in data["features"]:
+        props = sismo["properties"]
+        coords = sismo["geometry"]["coordinates"]
+        registros.append({
+            "marca temporal": pd.to_datetime(props["time"], unit="ms"),
+            "latitud": coords[1],
+            "longitud": coords[0],
+            "profundidad_km": coords[2],
+            "magnitud": props["mag"],
+            "lugar": props["place"]
+        })
+
+    df = pd.DataFrame(registros)
+    if region.lower() == "mexico":
+        df = df[df["lugar"].str.contains("Mexico", case=False, na=False)]
+
+    return df
+
+
+def mostrar_mapa_sismos(sismos):
+    """
+    Crea un mapa interactivo con los sismos.
+    """
+    if sismos.empty:
+        st.info("No hay sismos disponibles para mostrar.")
+        return None
+
+    mapa = folium.Map(location=[sismos["latitud"].mean(), sismos["longitud"].mean()], zoom_start=4)
+
+    for _, row in sismos.iterrows():
+        popup_text = f"<b>{row['lugar']}</b><br>Magnitud: {row['magnitud']:.1f}<br>Profundidad: {row['profundidad_km']:.1f} km"
+        color = "red" if row["magnitud"] >= 6 else "orange" if row["magnitud"] >= 5 else "yellow"
+        folium.CircleMarker(
+            location=[row["latitud"], row["longitud"]],
+            radius=row["magnitud"] * 1.2,
+            color=color,
+            fill=True,
+            fill_opacity=0.6,
+            popup=popup_text
+        ).add_to(mapa)
+
+    return mapa
+
+# ==========================
+# Interfaz principal
+# ==========================
+
+st.title("🌋 Aldeano Sismógrafo – Datos Reales")
+st.markdown("Visualizador de **sismos reales y clima histórico** basado en APIs públicas (USGS + Open-Meteo).")
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    region_seleccionada = st.selectbox("🌎 Región", ["Mexico", "Mundo"])
+with col2:
+    fecha_inicio = st.date_input("📅 Fecha inicial", datetime.now() - timedelta(days=7))
+with col3:
+    fecha_fin = st.date_input("📅 Fecha final", datetime.now())
+
+min_magnitud = st.slider("Magnitud mínima", 3.0, 8.0, 4.0)
+max_magnitud = st.slider("Magnitud máxima", 4.0, 9.5, 8.0)
+
+# Configuración de coordenadas base por región
+region_config = {
+    "Mexico": {"centro": [23.6345, -102.5528]},
+    "Mundo": {"centro": [0, 0]}
 }
 
-region_seleccionada = st.sidebar.selectbox("Seleccionar región:", list(regiones.keys()))
-region_config = regiones[region_seleccionada]
+# Obtener datos reales
+st.subheader("📊 Datos reales obtenidos:")
 
-st.sidebar.markdown("---")
-
-col1, col2 = st.sidebar.columns(2)
-with col1:
-    fecha_inicio = st.date_input("Desde:", datetime.now() - timedelta(days=365))
-with col2:
-    fecha_fin = st.date_input("Hasta:", datetime.now())
-
-st.sidebar.markdown("---")
-
-variables_climaticas = st.sidebar.multiselect(
-    "Variables climáticas:",
-    ["Temperatura", "Precipitación", "Nivel del Mar"],
-    default=["Temperatura", "Precipitación"]
-)
-
-st.sidebar.markdown("---")
-
-min_magnitud = st.sidebar.slider("Magnitud mínima:", 0.0, 9.0, 4.5, 0.1)
-max_magnitud = st.sidebar.slider("Magnitud máxima:", min_magnitud, 9.0, 8.0, 0.1)
-
-# Obtener datos
-sismos = generar_datos_sismicos(
-    fecha_inicio, fecha_fin,
-    region_config['centro'][0], region_config['centro'][1],
-    n_eventos=500
-)
+sismos = obtener_sismos_reales(fecha_inicio, fecha_fin, min_magnitud, max_magnitud, region_seleccionada)
 clima = obtener_clima_real_openmeteo(fecha_inicio, fecha_fin,
-                                     region_config['centro'][0], region_config['centro'][1])
+                                     region_config[region_seleccionada]["centro"][0],
+                                     region_config[region_seleccionada]["centro"][1])
 
-# Validaciones básicas
-if sismos.empty:
-    st.warning("⚠️ No hay datos sísmicos disponibles.")
-    st.stop()
-if clima.empty:
-    st.warning("⚠️ No hay datos climáticos disponibles para esas fechas.")
-    st.stop()
-
-# Aplicar filtro magnitud
-sismos_filtrados = sismos[
-    (sismos['magnitud'] >= min_magnitud) &
-    (sismos['magnitud'] <= max_magnitud)
-]
-
-st.markdown('<div class="main-header"> Aldeano Sismógrafo</div>', unsafe_allow_html=True)
-st.markdown("""
-<div style='text-align: center; font-size: 1.1em; color: #555;'>
-    Exploración interactiva de la relación entre actividad sísmica y variables climáticas
-</div>
-""", unsafe_allow_html=True)
-st.markdown("---")
-
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "Datos Sísmicos", "Mapas", "Correlaciones", "Regresión", "Documentación"
-])
-
-with tab1:
-    st.markdown('<div class="section-header"> Exploración de Datos</div>', unsafe_allow_html=True)
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Sismos Totales", f"{len(sismos_filtrados):,}", delta="+15%")
-    with col2:
-        st.metric("Magnitud Media", f"{sismos_filtrados['magnitud'].mean():.2f}", delta=f"Max: {sismos_filtrados['magnitud'].max():.1f}")
-    with col3:
-        st.metric("Profundidad Media", f"{sismos_filtrados['profundidad_km'].mean():.0f} km")
-    with col4:
-        superficiales = len(sismos_filtrados[sismos_filtrados['profundidad_km'] < 70])
-        st.metric("Superficiales", f"{superficiales}")
-
-    st.markdown("---")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("Distribución de Magnitudes")
-        fig = px.histogram(
-            sismos_filtrados, x='magnitud', nbins=30,
-            labels={'magnitud': 'Magnitud', 'count': 'Frecuencia'},
-            color_discrete_sequence=['#FF6B6B']
-        )
-        fig.update_layout(height=400)
-        st.plotly_chart(fig, use_container_width=True)
-    with col2:
-        st.markdown("### 🔍 Profundidad vs Magnitud")
-        fig = px.scatter(
-            sismos_filtrados, x='profundidad_km', y='magnitud',
-            color='magnitud', color_continuous_scale='Viridis',
-            size='magnitud',
-            hover_data=['marca temporal']
-        )
-        fig.update_layout(height=400)
-        st.plotly_chart(fig, use_container_width=True)
-
-with tab2:
-    st.markdown('<div class="section-header"> Mapas acá Interactivos</div>', unsafe_allow_html=True)
-    tipo_mapa = st.radio("Tipo de mapa:", ["Mapa de Calor", "Epicentros"], horizontal=True)
-    m = folium.Map(location=region_config['centro'], zoom_start=region_config['zoom'], tiles='OpenStreetMap')
-    if tipo_mapa == "Mapa de Calor":
-        heat_datos = [[row['latitud'], row['longitud'], row['magnitud']]
-                      for _, row in sismos_filtrados.iterrows()]
-        HeatMap(heat_datos, min_opacity=0.3, radius=20, blur=25,
-                gradient={0.4: 'blue', 0.6: 'lime', 0.8: 'yellow', 1.0: 'red'}).add_to(m)
+colA, colB = st.columns(2)
+with colA:
+    st.metric("Sismos detectados", len(sismos))
+with colB:
+    if not clima.empty:
+        st.metric("Temperatura promedio (°C)", round((clima["temp_max"].mean() + clima["temp_min"].mean()) / 2, 1))
     else:
-        for _, row in sismos_filtrados.sample(min(len(sismos_filtrados), 100)).iterrows():
-            color = '#FF0000' if row['magnitud'] > 6.5 else '#FFA500'
-            folium.CircleMarker(
-                location=[row['latitud'], row['longitud']],
-                radius=row['magnitud'] * 1.5,
-                popup=f"M{row['magnitud']:.1f} | {row['profundidad_km']:.0f} km",
-                color=color, fill=True, fill_opacity=0.7
-            ).add_to(m)
-    st_folium(m, width=1400, height=600)
+        st.metric("Temperatura promedio (°C)", "N/D")
 
-with tab3:
-    st.markdown('<div class="section-header"> Correlaciones</div>', unsafe_allow_html=True)
+# Mapa de sismos
+st.subheader("🗺️ Mapa de sismos")
+mapa = mostrar_mapa_sismos(sismos)
+if mapa:
+    st_folium(mapa, width=900, height=500)
 
-    # Asegurar fechas correctas
-    sismos_filtrados['marca temporal'] = pd.to_datetime(sismos_filtrados['marca temporal'], errors='coerce')
-    clima['fecha'] = pd.to_datetime(clima['fecha'], errors='coerce')
+# Gráfica de magnitudes
+if not sismos.empty:
+    st.subheader("📈 Magnitud de los sismos")
+    fig = px.histogram(sismos, x="magnitud", nbins=20, title="Distribución de magnitudes sísmicas", color_discrete_sequence=["red"])
+    st.plotly_chart(fig, use_container_width=True)
 
-    # Agregar datos por mes
-    sismos_filtrados = sismos_filtrados.copy()
-    sismos_filtrados['mes'] = sismos_filtrados["marca temporal"].dt.to_period('M')
-    datos_mensuales = sismos_filtrados.groupby('mes').agg({
-        "magnitud": ['count', 'mean', 'max']
-    }).reset_index()
-    datos_mensuales.columns = ['mes', 'freq', 'mag_mean', 'mag_max']
-    datos_mensuales['mes'] = datos_mensuales['mes'].dt.to_timestamp()
+# Gráfica de clima
+if not clima.empty:
+    st.subheader("🌤️ Clima histórico")
+    fig2 = px.line(clima, x="fecha", y=["temp_max", "temp_min", "precipitacion"],
+                   title="Temperaturas y precipitación diarias", markers=True)
+    st.plotly_chart(fig2, use_container_width=True)
 
-    clima['mes'] = clima['fecha'].dt.to_period('M').dt.to_timestamp()
-    clima_mensual = clima.groupby('mes').agg({
-        'temperatura': 'mean',
-        'precipitacion': 'sum'
-    }).reset_index()
-
-    # Usar merge_asof para unir meses cercanos
-    combinado = pd.merge_asof(
-        datos_mensuales.sort_values('mes'),
-        clima_mensual.sort_values('mes'),
-        on='mes',
-        tolerance=pd.Timedelta('90D'),
-        direction='nearest'
-    )
-
-    st.write("Tamaño del DataFrame combinado:", combinado.shape)
-    st.dataframe(combinado.head())
-    if combinado.empty:
-        st.warning("⚠️ No se encontraron datos combinados de clima y sismos.")
-        st.stop()
-
-    corr_matrix = combinado[['freq', 'temperatura', 'precipitacion']].corr()
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("Matriz")
-        fig = go.Figure(data=go.Heatmap(
-            z=corr_matrix.values,
-            x=['Frecuencia', 'Temperatura', 'Precipitación'],
-            y=['Frecuencia', 'Temperatura', 'Precipitación'],
-            colorscale='RdBu', zmid=0,
-            text=np.round(corr_matrix.values, 2),
-            texttemplate='%{text}'
-        ))
-        fig.update_layout(height=500)
-        st.plotly_chart(fig, use_container_width=True)
-    with col2:
-        st.markdown("Correlación con Frecuencia")
-        corr_freq = corr_matrix['freq'].drop('freq')
-        fig = px.bar(
-            x=['Temperatura', 'Precipitación'],
-            y=corr_freq.values,
-            color=corr_freq.values,
-            color_continuous_scale='RdYlGn'
-        )
-        fig.update_layout(height=500)
-        st.plotly_chart(fig, use_container_width=True)
-
-with tab4:
-    st.markdown('<div class="section-header">Regresión</div>', unsafe_allow_html=True)
-    st.markdown("Modelo de Regresión Lineal Múltiple")
-    st.latex(r'\text{Magnitud} = \beta_0 + \beta_1 \cdot T + \beta_2 \cdot P + \epsilon')
-    col1, col2, col3 = st.columns(3)
-    col1.metric("R² Score", "0.673")
-    col2.metric("RMSE", "0.428")
-    col3.metric("Intercepto", "5.124")
-
-with tab5:
-    st.markdown('<div class="section-header">Documentación</div>', unsafe_allow_html=True)
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("""
-        ### Fuentes de Datos
-        
-        **USGS Earthquake Catalog**
-        - API: earthquake.usgs.gov
-        - Cobertura: Global desde 1900
-        - Actualización: Tiempo real
-        
-        **Open-Meteo Historical Weather**
-        - Cobertura: ~80 años de datos reanalizados
-        - Variables: temperatura media diaria, precipitación diaria   
-        """)
-    with col2:
-        st.markdown("""
-        ### Métodos Estadísticos
-        
-        **Correlación**
-        - Pearson (relaciones lineales)
-        - Spearman (relaciones monótonas)
-        
-        **Regresión**
-        - OLS (Mínimos cuadrados)
-        """)
+st.markdown("---")
+st.caption("Datos de sismos: USGS Earthquake API | Datos climáticos: Open-Meteo Archive")
