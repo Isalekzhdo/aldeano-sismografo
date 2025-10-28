@@ -170,7 +170,7 @@ def obtener_sismos_reales(inicio, fin, min_magnitud=4.0, max_magnitud=9.0):
         "endtime": fin.strftime("%Y-%m-%d"),
         "minmagnitude": min_magnitud,
         "maxmagnitude": max_magnitud,
-        "limit": 1000
+        "limit": 1000000
     }
     resp = requests.get(url, params=params)
     data = resp.json()
