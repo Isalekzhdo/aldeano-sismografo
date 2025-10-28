@@ -106,77 +106,96 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 @st.cache_data
-def generar_datos_sismicos(inicio, fin, lat_epic, lon_epic, n_eventos=500):
-    fechas = pd.date_range(inicio, fin, periods=n_eventos)
-    sismos = pd.DataFrame({
-        "marca temporal": fechas,
-        "latitud": np.random.normal(lat_epic, 10, n_eventos),
-        "longitud": np.random.normal(lon_epic, 15, n_eventos),
-        "magnitud": np.random.exponential(1.3, n_eventos) + 4.0,
-        "profundidad_km": np.random.exponential(50, n_eventos) + 10,
-        "lugar": [f'Región {i}' for i in range(n_eventos)]
-    })
-    sismos['magnitud'] = sismos['magnitud'].clip(4.0, 9.0)
-    sismos['profundidad_km'] = sismos['profundidad_km'].clip(0, 700)
-    return sismos
-
-@st.cache_data
 def obtener_clima_real_openmeteo(inicio, fin, lat, lon):
     """
-    Descarga datos históricos de temperatura y precipitación 
-    desde Open-Meteo (históricos reales, no pronóstico).
+    Obtiene datos climáticos reales diarios entre inicio y fin usando Open-Meteo histórico.
+    Devuelve DataFrame con columnas: fecha, temperatura, precipitacion
     """
-
-    # Asegurar tipos correctos
+    # Asegurar que los argumentos sean tipo date o datetime
+    # Si son pd.Timestamp, convertir a date
     if isinstance(inicio, pd.Timestamp):
         inicio = inicio.date()
     if isinstance(fin, pd.Timestamp):
         fin = fin.date()
 
+    # No pedir datos más allá del día actual
     hoy = datetime.now().date()
     if fin > hoy:
         fin = hoy
 
-    url = "https://archive-api.open-meteo.com/v1/archive"
-    params = {
-        "latitude": lat,
-        "longitude": lon,
-        "start_date": inicio.strftime("%Y-%m-%d"),
-        "end_date": fin.strftime("%Y-%m-%d"),
-        "daily": ["temperature_2m_max", "temperature_2m_min", "precipitation_sum"],
-        "timezone": "auto"
-    }
+    start_str = inicio.strftime("%Y-%m-%d")
+    end_str = fin.strftime("%Y-%m-%d")
 
-    try:
-        resp = requests.get(url, params=params, timeout=15)
-        data = resp.json()
-    except Exception as e:
-        st.error(f"❌ Error al conectar con la API de clima: {e}")
+    url = (
+        "https://archive-api.open-meteo.com/v1/archive?"
+        f"latitude={lat}&longitude={lon}"
+        f"&start_date={start_str}&end_date={end_str}"
+        "&daily=temperature_2m_max,temperature_2m_min,precipitation_sum"
+        "&timezone=auto"
+    )
+    resp = requests.get(url)
+    data = resp.json()
+
+    if "daily" not in data:
+        return pd.DataFrame(columns=["fecha", "temperatura", "precipitacion"])
+    daily = data["daily"]
+    if ("time" not in daily or
+        "temperature_2m_max" not in daily or
+        "temperature_2m_min" not in daily or
+        "precipitation_sum" not in daily):
         return pd.DataFrame(columns=["fecha", "temperatura", "precipitacion"])
 
-    # Verificar si la respuesta tiene datos válidos
-    if "daily" not in data or "time" not in data["daily"]:
-        st.warning(⚠️ No se recibieron datos climáticos válidos de Open-Meteo.")
-        return pd.DataFrame(columns=["fecha", "temperatura", "precipitacion"])
-
-    # Crear DataFrame
-    clima = pd.DataFrame({
-        "fecha": pd.to_datetime(data["daily"]["time"]),
+    # Construir DataFrame
+    df = pd.DataFrame({
+        "fecha": pd.to_datetime(daily["time"], errors="coerce"),
         "temperatura": [
-            (max_t + min_t) / 2
-            for max_t, min_t in zip(
-                data["daily"]["temperature_2m_max"],
-                data["daily"]["temperature_2m_min"]
-            )
+            (tmax + tmin) / 2
+            for tmax, tmin in zip(daily["temperature_2m_max"], daily["temperature_2m_min"])
         ],
-        "precipitacion": data["daily"]["precipitation_sum"]
+        "precipitacion": daily["precipitation_sum"]
     })
+    df = df.dropna(subset=["fecha"])
+    return df
 
-    # Depurar datos faltantes
-    clima = clima.dropna(subset=["fecha"])
-    return clima
+@st.cache_data
+def obtener_sismos_reales(inicio, fin, min_magnitud=4.0, max_magnitud=9.0):
+    """
+    Obtiene datos de sismos reales del USGS entre inicio y fin,
+    con magnitudes entre min_magnitud y max_magnitud.
+    """
+    url = "https://earthquake.usgs.gov/fdsnws/event/1/query"
+    params = {
+        "format": "geojson",
+        "starttime": inicio.strftime("%Y-%m-%d"),
+        "endtime": fin.strftime("%Y-%m-%d"),
+        "minmagnitude": min_magnitud,
+        "maxmagnitude": max_magnitud,
+        "limit": 1000
+    }
+    resp = requests.get(url, params=params)
+    data = resp.json()
 
-# Sidebar y configuración
+    if "features" not in data:
+        return pd.DataFrame(columns=["marca temporal", "latitud", "longitud", "magnitud", "profundidad_km", "lugar"])
+
+    registros = []
+    for feat in data["features"]:
+        props = feat["properties"]
+        coords = feat["geometry"]["coordinates"]
+        # coords: [lon, lat, depth]
+        registros.append({
+            "marca temporal": pd.to_datetime(props["time"], unit="ms", errors="coerce"),
+            "latitud": coords[1],
+            "longitud": coords[0],
+            "profundidad_km": coords[2],
+            "magnitud": props.get("mag", None),
+            "lugar": props.get("place", "")
+        })
+
+    df = pd.DataFrame(registros)
+    return df
+
+# --- Sidebar configuración ---
 st.sidebar.title("Configuración")
 st.sidebar.markdown("---")
 
@@ -211,29 +230,26 @@ st.sidebar.markdown("---")
 min_magnitud = st.sidebar.slider("Magnitud mínima:", 0.0, 9.0, 4.5, 0.1)
 max_magnitud = st.sidebar.slider("Magnitud máxima:", min_magnitud, 9.0, 8.0, 0.1)
 
-# Obtener datos
-sismos = generar_datos_sismicos(
-    fecha_inicio, fecha_fin,
-    region_config['centro'][0], region_config['centro'][1],
-    n_eventos=500
-)
+# --- Obtener datos reales ahora ---
+sismos = obtener_sismos_reales(fecha_inicio, fecha_fin, min_magnitud, max_magnitud)
 clima = obtener_clima_real_openmeteo(fecha_inicio, fecha_fin,
                                      region_config['centro'][0], region_config['centro'][1])
 
 # Validaciones básicas
 if sismos.empty:
-    st.warning("⚠️ No hay datos sísmicos disponibles.")
+    st.warning("⚠️ No hay datos sísmicos disponibles para ese rango.")
     st.stop()
 if clima.empty:
-    st.warning("⚠️ No hay datos climáticos disponibles para esas fechas.")
+    st.warning("⚠️ No hay datos climáticos disponibles para ese rango o ubicación.")
     st.stop()
 
-# Aplicar filtro magnitud
+# Filtrar sismos por magnitud
 sismos_filtrados = sismos[
     (sismos['magnitud'] >= min_magnitud) &
     (sismos['magnitud'] <= max_magnitud)
 ]
 
+# --- Tu encabezado y presentación ---
 st.markdown('<div class="main-header"> Aldeano Sismógrafo</div>', unsafe_allow_html=True)
 st.markdown("""
 <div style='text-align: center; font-size: 1.1em; color: #555;'>
@@ -252,13 +268,13 @@ with tab1:
     with col1:
         st.metric("Sismos Totales", f"{len(sismos_filtrados):,}", delta="+15%")
     with col2:
-        st.metric("Magnitud Media", f"{sismos_filtrados['magnitud'].mean():.2f}", delta=f"Max: {sismos_filtrados['magnitud'].max():.1f}")
+        st.metric("Magnitud Media", f"{sismos_filtrados['magnitud'].mean():.2f}",
+                  delta=f"Max: {sismos_filtrados['magnitud'].max():.1f}")
     with col3:
         st.metric("Profundidad Media", f"{sismos_filtrados['profundidad_km'].mean():.0f} km")
     with col4:
         superficiales = len(sismos_filtrados[sismos_filtrados['profundidad_km'] < 70])
         st.metric("Superficiales", f"{superficiales}")
-
     st.markdown("---")
     col1, col2 = st.columns(2)
     with col1:
@@ -304,7 +320,7 @@ with tab2:
 with tab3:
     st.markdown('<div class="section-header"> Correlaciones</div>', unsafe_allow_html=True)
 
-    # Asegurar fechas correctas
+    # Conversión de fechas
     sismos_filtrados['marca temporal'] = pd.to_datetime(sismos_filtrados['marca temporal'], errors='coerce')
     clima['fecha'] = pd.to_datetime(clima['fecha'], errors='coerce')
 
@@ -323,7 +339,6 @@ with tab3:
         'precipitacion': 'sum'
     }).reset_index()
 
-    # Usar merge_asof para unir meses cercanos
     combinado = pd.merge_asof(
         datos_mensuales.sort_values('mes'),
         clima_mensual.sort_values('mes'),
@@ -353,6 +368,7 @@ with tab3:
         ))
         fig.update_layout(height=500)
         st.plotly_chart(fig, use_container_width=True)
+
     with col2:
         st.markdown("Correlación con Frecuencia")
         corr_freq = corr_matrix['freq'].drop('freq')
@@ -383,12 +399,11 @@ with tab5:
         
         **USGS Earthquake Catalog**
         - API: earthquake.usgs.gov
-        - Cobertura: Global desde 1900
-        - Actualización: Tiempo real
+        - Cobertura: global en tiempo casi real
         
         **Open-Meteo Historical Weather**
-        - Cobertura: ~80 años de datos reanalizados
-        - Variables: temperatura media diaria, precipitación diaria   
+        - Cobertura: muchos años de datos históricos
+        - Variables: temperatura diaria promedio, precipitación diaria
         """)
     with col2:
         st.markdown("""
@@ -396,8 +411,8 @@ with tab5:
         
         **Correlación**
         - Pearson (relaciones lineales)
-        - Spearman (relaciones monótonas)
+        - Spearman (monótonas)
         
         **Regresión**
-        - OLS (Mínimos cuadrados)
+        - OLS (mínimos cuadrados)
         """)
