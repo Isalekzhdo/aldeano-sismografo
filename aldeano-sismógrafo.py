@@ -123,42 +123,58 @@ def generar_datos_sismicos(inicio, fin, lat_epic, lon_epic, n_eventos=500):
 @st.cache_data
 def obtener_clima_real_openmeteo(inicio, fin, lat, lon):
     """
-    Usando Open-Meteo Historical Weather API (archive) para obtener temperatura diaria media
-    y precipitación diaria entre fechas inicio y fin para coordenadas lat, lon.
+    Descarga datos históricos de temperatura y precipitación 
+    desde Open-Meteo (históricos reales, no pronóstico).
     """
-    # Asegurarse de no pedir fechas futuras
-    hoy = datetime.utcnow().date()
-    if fin.date() > hoy:
-        fin = datetime(hoy.year, hoy.month, hoy.day)
-    # Formato ISO de fechas
-    start_str = inicio.strftime("%Y-%m-%d")
-    end_str = fin.strftime("%Y-%m-%d")
-    # Construct URL para daily variables: temperatura media y precipitación
-    url = (
-        "https://archive-api.open-meteo.com/v1/archive?"
-        f"latitude={lat}&longitude={lon}"
-        f"&start_date={start_str}&end_date={end_str}"
-        "&daily=temperature_2m_mean,precipitation_sum"
-        "&timezone=auto"
-    )
-    resp = requests.get(url)
-    data = resp.json()
 
-    # Verificar estructura válida
-    if "daily" not in data:
-        return pd.DataFrame(columns=["fecha", "temperatura", "precipitacion"])
-    daily = data["daily"]
-    if "time" not in daily or "temperature_2m_mean" not in daily or "precipitation_sum" not in daily:
+    # Asegurar tipos correctos
+    if isinstance(inicio, pd.Timestamp):
+        inicio = inicio.date()
+    if isinstance(fin, pd.Timestamp):
+        fin = fin.date()
+
+    hoy = datetime.now().date()
+    if fin > hoy:
+        fin = hoy
+
+    url = "https://archive-api.open-meteo.com/v1/archive"
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "start_date": inicio.strftime("%Y-%m-%d"),
+        "end_date": fin.strftime("%Y-%m-%d"),
+        "daily": ["temperature_2m_max", "temperature_2m_min", "precipitation_sum"],
+        "timezone": "auto"
+    }
+
+    try:
+        resp = requests.get(url, params=params, timeout=15)
+        data = resp.json()
+    except Exception as e:
+        st.error(f"❌ Error al conectar con la API de clima: {e}")
         return pd.DataFrame(columns=["fecha", "temperatura", "precipitacion"])
 
-    # Convertir a DataFrame
-    df = pd.DataFrame({
-        "fecha": pd.to_datetime(daily["time"], errors="coerce"),
-        "temperatura": daily["temperature_2m_mean"],
-        "precipitacion": daily["precipitation_sum"]
+    # Verificar si la respuesta tiene datos válidos
+    if "daily" not in data or "time" not in data["daily"]:
+        st.warning("⚠️ No se recibieron datos climáticos válidos de Open-Meteo.")
+        return pd.DataFrame(columns=["fecha", "temperatura", "precipitacion"])
+
+    # Crear DataFrame
+    clima = pd.DataFrame({
+        "fecha": pd.to_datetime(data["daily"]["time"]),
+        "temperatura": [
+            (max_t + min_t) / 2
+            for max_t, min_t in zip(
+                data["daily"]["temperature_2m_max"],
+                data["daily"]["temperature_2m_min"]
+            )
+        ],
+        "precipitacion": data["daily"]["precipitation_sum"]
     })
-    df = df.dropna(subset=["fecha"])
-    return df
+
+    # Depurar datos faltantes
+    clima = clima.dropna(subset=["fecha"])
+    return clima
 
 # Sidebar y configuración
 st.sidebar.title("Configuración")
